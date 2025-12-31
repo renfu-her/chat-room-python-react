@@ -1,7 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Theme, User, Group, ChatSession, Message, Attachment } from './types';
-import { INITIAL_USERS, INITIAL_GROUPS } from './constants';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
 import TopNav from './components/TopNav';
@@ -9,14 +8,15 @@ import GroupManagement from './components/GroupManagement';
 import ProfileModal from './components/ProfileModal';
 import Login from './components/Login';
 import Register from './components/Register';
-import { GoogleGenAI } from "@google/genai";
+import { authApi, usersApi, friendsApi, groupsApi, messagesApi } from './services/api';
+import { getWebSocket, WebSocketMessage } from './services/websocket';
 
 const App: React.FC = () => {
   const [theme, setTheme] = useState<Theme>('light');
   const [authView, setAuthView] = useState<'login' | 'register' | 'chat'>('login');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
-  const [groups, setGroups] = useState<Group[]>(INITIAL_GROUPS);
+  const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [isManagingGroup, setIsManagingGroup] = useState(false);
@@ -24,7 +24,8 @@ const App: React.FC = () => {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   
   // Track which users are "friends" (can be chatted with)
-  const [friendIds, setFriendIds] = useState<string[]>(['user-2', 'user-3', 'user-4', 'user-5', 'user-7']);
+  const [friendIds, setFriendIds] = useState<number[]>([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -37,113 +38,247 @@ const App: React.FC = () => {
 
   const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
 
+  // Load data when user is logged in
+  useEffect(() => {
+    if (currentUser) {
+      loadData();
+      connectWebSocket();
+    } else {
+      // Check if user is already logged in
+      checkAuth();
+    }
+    
+    return () => {
+      if (currentUser) {
+        const ws = getWebSocket();
+        ws.disconnect();
+      }
+    };
+  }, [currentUser]);
+
+  const checkAuth = async () => {
+    try {
+      const user = await authApi.getMe();
+      setCurrentUser({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        status: user.status,
+      });
+      setAuthView('chat');
+    } catch {
+      // Not logged in
+    }
+  };
+
+  const loadData = async () => {
+    if (!currentUser) return;
+    setLoading(true);
+    try {
+      // Load users (for Strangers list)
+      const allUsers = await usersApi.getUsers();
+      setUsers(allUsers);
+      
+      // Load friends
+      const friends = await friendsApi.getFriends();
+      setFriendIds(friends.map(f => f.id));
+      
+      // Load groups
+      const userGroups = await groupsApi.getGroups();
+      setGroups(userGroups);
+    } catch (err) {
+      console.error('Failed to load data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const connectWebSocket = () => {
+    const ws = getWebSocket();
+    ws.connect();
+    
+    ws.onMessage((message: WebSocketMessage) => {
+      if (message.type === 'message' && message.id) {
+        const newMessage: Message = {
+          id: message.id,
+          senderId: message.senderId!,
+          recipientId: message.recipientId,
+          groupId: message.groupId,
+          text: message.text,
+          attachment: message.attachment,
+          timestamp: message.timestamp ? new Date(message.timestamp).getTime() : Date.now(),
+        };
+        setMessages(prev => [...prev, newMessage]);
+      }
+    });
+  };
+
   const handleLogin = (user: User) => {
     setCurrentUser(user);
     setAuthView('chat');
   };
 
-  const handleRegister = (name: string, email: string) => {
-    const newUser: User = {
-      id: `user-${Date.now()}`,
-      name: name,
-      email: email,
-      avatar: `https://picsum.photos/seed/${name}/200`,
-      status: 'online',
-    };
-    setUsers(prev => [...prev, newUser]);
-    setCurrentUser(newUser);
+  const handleRegister = (user: User) => {
+    setCurrentUser(user);
     setAuthView('chat');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await authApi.logout();
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
+    const ws = getWebSocket();
+    ws.disconnect();
     setCurrentUser(null);
     setAuthView('login');
     setActiveSession(null);
+    setMessages([]);
+    setUsers([]);
+    setGroups([]);
+    setFriendIds([]);
   };
 
-  const handleUpdateProfile = (updates: Partial<User>) => {
+  const handleUpdateProfile = async (updates: Partial<User>) => {
     if (!currentUser) return;
-    const updatedUser = { ...currentUser, ...updates };
-    setCurrentUser(updatedUser);
-    setUsers(prev => prev.map(u => u.id === currentUser.id ? updatedUser : u));
-  };
-
-  const handleAddFriend = (userId: string) => {
-    if (!friendIds.includes(userId)) {
-      setFriendIds(prev => [...prev, userId]);
+    try {
+      const updated = await usersApi.updateMe({
+        name: updates.name,
+        email: updates.email,
+      });
+      setCurrentUser(updated);
+      setUsers(prev => prev.map(u => u.id === currentUser.id ? updated : u));
+    } catch (err) {
+      console.error('Failed to update profile:', err);
     }
   };
 
-  const handleRemoveFriend = (userId: string) => {
-    setFriendIds(prev => prev.filter(id => id !== userId));
-    // Close session if the friend being removed is the active chat
-    if (activeSession?.type === 'personal' && activeSession.id === userId) {
-      setActiveSession(null);
+  const handleAddFriend = async (userId: number) => {
+    try {
+      await friendsApi.addFriend(userId);
+      if (!friendIds.includes(userId)) {
+        setFriendIds(prev => [...prev, userId]);
+      }
+      // Reload users to update friends list
+      await loadData();
+    } catch (err) {
+      console.error('Failed to add friend:', err);
     }
   };
 
-  const sendMessage = (text?: string, attachment?: Attachment) => {
+  const handleRemoveFriend = async (userId: number) => {
+    try {
+      await friendsApi.removeFriend(userId);
+      setFriendIds(prev => prev.filter(id => id !== userId));
+      // Close session if the friend being removed is the active chat
+      if (activeSession?.type === 'personal' && activeSession.id === userId) {
+        setActiveSession(null);
+      }
+      // Reload users
+      await loadData();
+    } catch (err) {
+      console.error('Failed to remove friend:', err);
+    }
+  };
+
+  // Load messages when session changes
+  useEffect(() => {
+    if (activeSession && currentUser) {
+      loadMessages();
+    } else {
+      setMessages([]);
+    }
+  }, [activeSession, currentUser]);
+
+  const loadMessages = async () => {
+    if (!activeSession || !currentUser) return;
+    
+    try {
+      const chatType = activeSession.type === 'personal' ? 'personal' : 'group';
+      const apiMessages = await messagesApi.getMessages(chatType, activeSession.id, 50, 0);
+      
+      // Convert API messages to frontend format
+      const convertedMessages: Message[] = apiMessages.map(msg => ({
+        id: msg.id,
+        senderId: msg.senderId,
+        recipientId: msg.recipientId,
+        groupId: msg.groupId,
+        text: msg.text,
+        attachment: msg.attachment,
+        timestamp: new Date(msg.timestamp).getTime(),
+      }));
+      
+      setMessages(convertedMessages);
+    } catch (err) {
+      console.error('Failed to load messages:', err);
+    }
+  };
+
+  const sendMessage = async (text?: string, attachment?: Attachment) => {
     if (!activeSession || !currentUser || (!text?.trim() && !attachment)) return;
 
     const isGroup = activeSession.type === 'group';
+    const ws = getWebSocket();
     
-    const newMessage: Message = {
-      id: Date.now().toString(),
-      senderId: currentUser.id,
-      recipientId: !isGroup ? activeSession.id : undefined,
-      groupId: isGroup ? activeSession.id : undefined,
-      text: text?.trim(),
-      attachment,
-      timestamp: Date.now(),
-    };
-
-    setMessages(prev => [...prev, newMessage]);
-
-    if (activeSession.type === 'personal' && activeSession.id === 'user-2') {
-       if (text) triggerGeminiResponse(text);
-       else if (attachment) triggerGeminiResponse(`You sent me a file: ${attachment.name}`);
-    }
-  };
-
-  const triggerGeminiResponse = async (userMsg: string) => {
     try {
-      if (!currentUser) return;
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `Act as a user in a chat application. Reply briefly to: "${userMsg}"`,
-      });
-      
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        senderId: 'user-2',
-        recipientId: currentUser.id,
-        text: response.text || 'Got it!',
-        timestamp: Date.now(),
-      };
-      setMessages(prev => [...prev, aiMessage]);
+      if (attachment) {
+        // Attachment already uploaded via API in ChatWindow
+        // Just send via WebSocket for real-time delivery
+        if (isGroup) {
+          ws.sendMessage(undefined, attachment, undefined, activeSession.id);
+        } else {
+          ws.sendMessage(undefined, attachment, activeSession.id, undefined);
+        }
+      } else if (text) {
+        // Send via WebSocket for real-time
+        if (isGroup) {
+          ws.sendMessage(text, undefined, undefined, activeSession.id);
+        } else {
+          ws.sendMessage(text, undefined, activeSession.id, undefined);
+        }
+        
+        // Also save via API as backup
+        try {
+          if (isGroup) {
+            await messagesApi.sendMessage(text, undefined, activeSession.id);
+          } else {
+            await messagesApi.sendMessage(text, activeSession.id, undefined);
+          }
+        } catch (err) {
+          console.error('Failed to save message via API:', err);
+        }
+      }
     } catch (err) {
-      console.error("Gemini Error:", err);
+      console.error('Failed to send message:', err);
     }
   };
 
-  const handleCreateGroup = (name: string, members: string[]) => {
+  const handleCreateGroup = async (name: string, members: number[]) => {
     if (!currentUser) return;
-    const newGroup: Group = {
-      id: `group-${Date.now()}`,
-      name,
-      creatorId: currentUser.id,
-      members: [...new Set([currentUser.id, ...members])],
-      deniedMembers: [],
-    };
-    setGroups(prev => [...prev, newGroup]);
-    setActiveSession({ type: 'group', id: newGroup.id });
-    setIsManagingGroup(false);
-    setIsMobileSidebarOpen(false);
+    try {
+      const newGroup = await groupsApi.createGroup(name, members);
+      setGroups(prev => [...prev, newGroup]);
+      setActiveSession({ type: 'group', id: newGroup.id });
+      setIsManagingGroup(false);
+      setIsMobileSidebarOpen(false);
+      await loadData();
+    } catch (err) {
+      console.error('Failed to create group:', err);
+    }
   };
 
-  const updateGroup = (groupId: string, updates: Partial<Group>) => {
-    setGroups(prev => prev.map(g => g.id === groupId ? { ...g, ...updates } : g));
+  const updateGroup = async (groupId: number, updates: Partial<Group>) => {
+    try {
+      const updated = await groupsApi.updateGroup(groupId, {
+        name: updates.name,
+        memberIds: updates.members,
+      });
+      setGroups(prev => prev.map(g => g.id === groupId ? updated : g));
+    } catch (err) {
+      console.error('Failed to update group:', err);
+    }
   };
 
   const filteredMessages = useMemo(() => {
@@ -165,7 +300,7 @@ const App: React.FC = () => {
     ? groups.find(g => g.id === activeSession.id) 
     : null;
 
-  const isDeniedFromGroup = activeGroup?.deniedMembers.includes(currentUser?.id || '');
+  const isDeniedFromGroup = activeGroup?.deniedMembers.includes(currentUser?.id || 0);
 
   const selectSession = useCallback((session: ChatSession) => {
     setActiveSession(session);
@@ -173,7 +308,7 @@ const App: React.FC = () => {
   }, []);
 
   if (authView === 'login') {
-    return <Login users={users} onLogin={handleLogin} onGoToRegister={() => setAuthView('register')} />;
+    return <Login onLogin={handleLogin} onGoToRegister={() => setAuthView('register')} />;
   }
   if (authView === 'register') {
     return <Register onRegister={handleRegister} onGoToLogin={() => setAuthView('login')} />;
@@ -276,8 +411,11 @@ const App: React.FC = () => {
           editingGroup={activeGroup || undefined}
           onClose={() => setIsManagingGroup(false)}
           onCreate={handleCreateGroup}
-          onUpdate={(updates) => {
-            if (activeGroup) updateGroup(activeGroup.id, updates);
+          onUpdate={async (updates) => {
+            if (activeGroup) {
+              await updateGroup(activeGroup.id, updates);
+              await loadData();
+            }
             setIsManagingGroup(false);
           }}
         />

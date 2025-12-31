@@ -5,10 +5,10 @@ import { User, Group } from '../types';
 interface GroupManagementProps {
   currentUser: User;
   users: User[];
-  friendIds: string[];
+  friendIds: number[];
   editingGroup?: Group;
   onClose: () => void;
-  onCreate: (name: string, members: string[]) => void;
+  onCreate: (name: string, members: number[]) => void;
   onUpdate: (updates: Partial<Group>) => void;
 }
 
@@ -16,12 +16,12 @@ const GroupManagement: React.FC<GroupManagementProps> = ({
   currentUser, users, friendIds, editingGroup, onClose, onCreate, onUpdate 
 }) => {
   const [name, setName] = useState(editingGroup?.name || '');
-  const [selectedMembers, setSelectedMembers] = useState<string[]>(editingGroup?.members || [currentUser.id]);
+  const [selectedMembers, setSelectedMembers] = useState<number[]>(editingGroup?.members || [currentUser.id]);
 
   // Only show users who are friends (excluding Me from the toggle list logic)
   const friendUsers = users.filter(u => friendIds.includes(u.id) || u.id === currentUser.id);
 
-  const toggleMember = (userId: string) => {
+  const toggleMember = (userId: number) => {
     if (userId === currentUser.id) return; // Creator must be in group
     setSelectedMembers(prev => 
       prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]

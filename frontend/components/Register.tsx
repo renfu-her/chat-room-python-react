@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../types';
+import { authApi } from '../services/api';
 
 interface RegisterProps {
-  onRegister: (name: string, email: string) => void;
+  onRegister: (user: User) => void;
   onGoToLogin: () => void;
 }
 
@@ -67,7 +68,7 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onGoToLogin }) => {
     }
   }, [captchaCode]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -88,7 +89,22 @@ const Register: React.FC<RegisterProps> = ({ onRegister, onGoToLogin }) => {
       return;
     }
 
-    onRegister(name, email);
+    try {
+      const response = await authApi.register(name, email, password);
+      // Convert API user to frontend format
+      const user: User = {
+        id: response.user.id,
+        name: response.user.name,
+        email: response.user.email,
+        avatar: response.user.avatar,
+        status: response.user.status,
+      };
+      onRegister(user);
+    } catch (err: any) {
+      setError(err.message || 'Registration failed.');
+      generateCaptcha();
+      setCaptchaInput('');
+    }
   };
 
   return (

@@ -13,8 +13,8 @@ interface SidebarProps {
   toggleTheme: () => void;
   onLogout: () => void;
   onOpenProfile: () => void;
-  friendIds: string[];
-  onAddFriend: (userId: string) => void;
+  friendIds: number[];
+  onAddFriend: (userId: number) => void;
   onCloseMobile?: () => void;
 }
 

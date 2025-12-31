@@ -2,9 +2,9 @@
 export type Theme = 'light' | 'dark';
 
 export interface User {
-  id: string;
+  id: number; // Changed to number to match API
   name: string;
-  email: string; // Added email for login
+  email: string;
   avatar: string;
   status: 'online' | 'offline';
   isMe?: boolean;
@@ -19,21 +19,21 @@ export interface Attachment {
 }
 
 export interface Message {
-  id: string;
-  senderId: string;
-  recipientId?: string; // Target user for personal chats
+  id: number; // Changed to number to match API
+  senderId: number; // Changed to number
+  recipientId?: number; // Changed to number
   text?: string;
   attachment?: Attachment;
-  timestamp: number;
-  groupId?: string; // Target group for group chats
+  timestamp: number; // Will convert from ISO string
+  groupId?: number; // Changed to number
 }
 
 export interface Group {
-  id: string;
+  id: number; // Changed to number to match API
   name: string;
-  creatorId: string;
-  members: string[]; // User IDs
-  deniedMembers: string[]; // User IDs blocked from this group
+  creatorId: number; // Changed to number
+  members: number[]; // Changed to number[]
+  deniedMembers: number[]; // Changed to number[]
   lastMessage?: string;
 }
 
@@ -41,5 +41,5 @@ export type ChatType = 'personal' | 'group';
 
 export interface ChatSession {
   type: ChatType;
-  id: string; // Target user ID or Group ID
+  id: number; // Changed to number to match API
 }

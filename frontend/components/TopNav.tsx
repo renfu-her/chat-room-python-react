@@ -7,8 +7,8 @@ interface TopNavProps {
   activeSession: ChatSession | null;
   activeGroup: Group | null;
   onManageGroup: () => void;
-  friendIds: string[];
-  onRemoveFriend: (userId: string) => void;
+  friendIds: number[];
+  onRemoveFriend: (userId: number) => void;
   users: User[];
   onToggleSidebar: () => void;
 }

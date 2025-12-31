@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { User, Message, ChatSession, Attachment } from '../types';
+import { messagesApi } from '../services/api';
 
 interface ChatWindowProps {
   session: ChatSession;
@@ -35,19 +36,37 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, messages, currentUser,
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = reader.result as string;
-      const isImage = file.type.startsWith('image/');
-      onSendMessage(undefined, {
-        name: file.name,
-        url: url,
-        mimeType: file.type,
-        size: file.size,
-        isImage
-      });
-    };
-    reader.readAsDataURL(file);
+    try {
+      // Upload file directly to API
+      const isGroup = session.type === 'group';
+      const uploadedMessage = await messagesApi.uploadMessage(
+        file,
+        isGroup ? undefined : session.id,
+        isGroup ? session.id : undefined
+      );
+      
+      // Convert to attachment format for display
+      if (uploadedMessage.attachment) {
+        onSendMessage(undefined, uploadedMessage.attachment);
+      }
+    } catch (err) {
+      console.error('Failed to upload file:', err);
+      // Fallback to local preview
+      const reader = new FileReader();
+      reader.onload = () => {
+        const url = reader.result as string;
+        const isImage = file.type.startsWith('image/');
+        onSendMessage(undefined, {
+          name: file.name,
+          url: url,
+          mimeType: file.type,
+          size: file.size,
+          isImage
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+    
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 

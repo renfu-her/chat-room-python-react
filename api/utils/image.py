@@ -1,5 +1,6 @@
 import uuid
 import os
+import io
 from PIL import Image
 from fastapi import UploadFile
 from dotenv import load_dotenv
@@ -74,5 +75,3 @@ async def process_image_upload(file: UploadFile) -> dict:
             "size": file_size,
             "isImage": False
         }
-
-import io

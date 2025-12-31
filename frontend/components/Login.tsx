@@ -1,15 +1,14 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../types';
-import { MOCK_PASSWORD } from '../constants';
+import { authApi } from '../services/api';
 
 interface LoginProps {
-  users: User[];
   onLogin: (user: User) => void;
   onGoToRegister: () => void;
 }
 
-const Login: React.FC<LoginProps> = ({ users, onLogin, onGoToRegister }) => {
+const Login: React.FC<LoginProps> = ({ onLogin, onGoToRegister }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [captchaInput, setCaptchaInput] = useState('');
@@ -78,7 +77,7 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, onGoToRegister }) => {
     }
   }, [captchaCode]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -94,12 +93,19 @@ const Login: React.FC<LoginProps> = ({ users, onLogin, onGoToRegister }) => {
       return;
     }
 
-    const foundUser = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    
-    if (foundUser && password === MOCK_PASSWORD) {
-      onLogin(foundUser);
-    } else {
-      setError('Invalid email or password.');
+    try {
+      const response = await authApi.login(email, password);
+      // Convert API user to frontend format
+      const user: User = {
+        id: response.user.id,
+        name: response.user.name,
+        email: response.user.email,
+        avatar: response.user.avatar,
+        status: response.user.status,
+      };
+      onLogin(user);
+    } catch (err: any) {
+      setError(err.message || 'Invalid email or password.');
       generateCaptcha();
       setCaptchaInput('');
     }
