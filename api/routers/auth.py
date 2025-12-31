@@ -3,6 +3,7 @@ from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import Optional
+from datetime import datetime
 
 from database import get_db
 from models.user import User
@@ -59,9 +60,30 @@ async def register(
     db.commit()
     db.refresh(new_user)
     
+    # Update user status to online
+    new_user.status = "online"
+    db.commit()
+    
     # Create session
     session_id = create_session(new_user.id)
     response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
+    
+    # Broadcast user online status via WebSocket (if connected)
+    try:
+        from websocket.chat import broadcast_user_status, broadcast_to_all
+        await broadcast_user_status(new_user.id, "online", broadcast_to_all_users=True)
+        
+        # Send login notification to all users
+        login_notification = {
+            "type": "user_login",
+            "user_id": new_user.id,
+            "user_name": new_user.name,
+            "message": f"{new_user.name} 已登入",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        await broadcast_to_all(login_notification, exclude_user_id=new_user.id)
+    except:
+        pass  # WebSocket might not be available
     
     return {
         "user": UserResponse.model_validate(new_user),
@@ -91,6 +113,23 @@ async def login(
     session_id = create_session(user.id)
     response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
     
+    # Broadcast user online status via WebSocket (if connected)
+    try:
+        from websocket.chat import broadcast_user_status, broadcast_to_all
+        await broadcast_user_status(user.id, "online", broadcast_to_all_users=True)
+        
+        # Send login notification to all users
+        login_notification = {
+            "type": "user_login",
+            "user_id": user.id,
+            "user_name": user.name,
+            "message": f"{user.name} 已登入",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        await broadcast_to_all(login_notification, exclude_user_id=user.id)
+    except:
+        pass  # WebSocket might not be available
+    
     return {
         "user": UserResponse.model_validate(user),
         "session_id": session_id
@@ -107,6 +146,36 @@ async def logout(
     # Update user status to offline
     current_user.status = "offline"
     db.commit()
+    
+    # Broadcast user offline status to all friends via WebSocket
+    try:
+        from websocket.chat import broadcast_user_status, active_connections, broadcast_to_all
+        user_id = current_user.id
+        
+        # Close WebSocket connection if exists
+        if user_id in active_connections:
+            try:
+                ws = active_connections[user_id]
+                await ws.close()
+            except:
+                pass
+            del active_connections[user_id]
+        
+        # Broadcast status change
+        await broadcast_user_status(user_id, "offline", broadcast_to_all_users=True)
+        
+        # Send logout notification to all users
+        logout_notification = {
+            "type": "user_logout",
+            "user_id": user_id,
+            "user_name": current_user.name,
+            "message": f"{current_user.name} 已登出",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        await broadcast_to_all(logout_notification)
+    except Exception as e:
+        print(f"Error in logout WebSocket broadcast: {e}")
+        pass  # WebSocket might not be available
     
     # Delete session
     session_id = request.cookies.get("session_id")

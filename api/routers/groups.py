@@ -105,6 +105,17 @@ async def create_group(
         GroupMember.group_id == new_group.id
     ).all()]
     
+    # Broadcast group creation via WebSocket
+    try:
+        from websocket.chat import broadcast_group_change
+        await broadcast_group_change(new_group.id, "created", {
+            "name": new_group.name,
+            "creator_id": new_group.creator_id,
+            "members": members
+        })
+    except:
+        pass  # WebSocket might not be available
+    
     return GroupResponse(
         id=new_group.id,
         name=new_group.name,
@@ -216,6 +227,17 @@ async def update_group(
         GroupDeniedMember.group_id == group_id
     ).all()]
     
+    # Broadcast group update via WebSocket
+    try:
+        from websocket.chat import broadcast_group_change
+        await broadcast_group_change(group_id, "updated", {
+            "name": group.name,
+            "members": members,
+            "denied_members": denied
+        })
+    except:
+        pass  # WebSocket might not be available
+    
     return GroupResponse(
         id=group.id,
         name=group.name,
@@ -245,11 +267,23 @@ async def delete_group(
             detail="Only group creator can delete group"
         )
     
+    # Get members before deletion for notification
+    member_ids = [gm.user_id for gm in db.query(GroupMember).filter(
+        GroupMember.group_id == group_id
+    ).all()]
+    
     # Delete related records
     db.query(GroupMember).filter(GroupMember.group_id == group_id).delete()
     db.query(GroupDeniedMember).filter(GroupDeniedMember.group_id == group_id).delete()
     db.delete(group)
     db.commit()
+    
+    # Broadcast group deletion via WebSocket
+    try:
+        from websocket.chat import broadcast_group_change
+        await broadcast_group_change(group_id, "deleted", {})
+    except:
+        pass  # WebSocket might not be available
     
     return {"message": "Group deleted successfully"}
 
@@ -304,6 +338,15 @@ async def add_member(
     db.add(new_member)
     db.commit()
     
+    # Broadcast member addition via WebSocket
+    try:
+        from websocket.chat import broadcast_group_change
+        await broadcast_group_change(group_id, "member_added", {
+            "user_id": request.user_id
+        })
+    except:
+        pass  # WebSocket might not be available
+    
     return {"message": "Member added successfully"}
 
 @router.delete("/{group_id}/members/{user_id}", response_model=dict)
@@ -345,6 +388,15 @@ async def remove_member(
         GroupMember.user_id == user_id
     ).delete()
     db.commit()
+    
+    # Broadcast member removal via WebSocket
+    try:
+        from websocket.chat import broadcast_group_change
+        await broadcast_group_change(group_id, "member_removed", {
+            "user_id": user_id
+        })
+    except:
+        pass  # WebSocket might not be available
     
     return {"message": "Member removed successfully"}
 

@@ -104,6 +104,13 @@ async def add_friend(
     db.add(friendship2)
     db.commit()
     
+    # Broadcast friend change via WebSocket
+    try:
+        from websocket.chat import broadcast_friend_change
+        await broadcast_friend_change(current_user.id, user_id, "added")
+    except:
+        pass  # WebSocket might not be available
+    
     return {"message": "Friend added successfully"}
 
 @router.delete("/{user_id}", response_model=dict)
@@ -121,5 +128,12 @@ async def remove_friend(
         )
     ).delete()
     db.commit()
+    
+    # Broadcast friend change via WebSocket
+    try:
+        from websocket.chat import broadcast_friend_change
+        await broadcast_friend_change(current_user.id, user_id, "removed")
+    except:
+        pass  # WebSocket might not be available
     
     return {"message": "Friend removed successfully"}

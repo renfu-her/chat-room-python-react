@@ -48,7 +48,35 @@ const App: React.FC = () => {
       checkAuth();
     }
     
+    // Handle browser close/refresh
+    const handleBeforeUnload = () => {
+      if (currentUser) {
+        const ws = getWebSocket();
+        // Send a message to server before closing (if possible)
+        // The server will detect the disconnect and broadcast logout
+        try {
+          ws.disconnect();
+        } catch (e) {
+          // Ignore errors during unload
+        }
+      }
+    };
+    
+    // Handle page visibility change (tab switch, minimize, etc.)
+    const handleVisibilityChange = () => {
+      if (document.hidden && currentUser) {
+        // Tab is hidden, but don't disconnect WebSocket
+        // Just log for debugging
+        console.log('Tab hidden, keeping WebSocket connection');
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (currentUser) {
         const ws = getWebSocket();
         ws.disconnect();
@@ -109,7 +137,120 @@ const App: React.FC = () => {
           attachment: message.attachment,
           timestamp: message.timestamp ? new Date(message.timestamp).getTime() : Date.now(),
         };
-        setMessages(prev => [...prev, newMessage]);
+        
+        // Check if this is an update to a pending message or a new message
+        setMessages(prev => {
+          // Check if we have a pending message (temporary ID) that matches
+          const pendingIndex = prev.findIndex(m => 
+            m.id < 0 && // Temporary ID (negative)
+            m.senderId === newMessage.senderId &&
+            m.recipientId === newMessage.recipientId &&
+            m.groupId === newMessage.groupId &&
+            m.text === newMessage.text
+          );
+          
+          if (pendingIndex >= 0) {
+            // Replace pending message with real message
+            const updated = [...prev];
+            updated[pendingIndex] = newMessage;
+            return updated;
+          } else {
+            // New message, add it
+            return [...prev, newMessage];
+          }
+        });
+      } else if (message.type === 'user_status_update' && message.userId) {
+        // Update user status in the users list
+        console.log(`[狀態更新] 用戶 ${message.userId} (${message.userName || ''}) 狀態: ${message.status || 'offline'}`);
+        setUsers(prev => {
+          const userIndex = prev.findIndex(u => u.id === message.userId);
+          if (userIndex >= 0) {
+            // User exists, update status
+            const updated = [...prev];
+            updated[userIndex] = { ...updated[userIndex], status: (message.status || 'offline') as 'online' | 'offline' };
+            return updated;
+          } else {
+            // User not in list, might be a friend we haven't loaded yet
+            // This shouldn't happen, but we'll handle it gracefully
+            return prev;
+          }
+        });
+      } else if (message.type === 'user_login') {
+        // User login notification - show in console or UI
+        console.log(`[系統訊息] ${message.userName || `用戶 ${message.userId}`} 已登入`);
+        // Update user status if user is in the list
+        if (message.userId) {
+          setUsers(prev => {
+            const userIndex = prev.findIndex(u => u.id === message.userId);
+            if (userIndex >= 0) {
+              const updated = [...prev];
+              updated[userIndex] = { ...updated[userIndex], status: 'online' };
+              return updated;
+            }
+            return prev;
+          });
+        }
+      } else if (message.type === 'user_logout') {
+        // User logout notification - show in console or UI
+        console.log(`[系統訊息] ${message.userName || `用戶 ${message.userId}`} 已登出`);
+        // Update user status if user is in the list
+        if (message.userId) {
+          setUsers(prev => {
+            const userIndex = prev.findIndex(u => u.id === message.userId);
+            if (userIndex >= 0) {
+              const updated = [...prev];
+              updated[userIndex] = { ...updated[userIndex], status: 'offline' };
+              return updated;
+            }
+            return prev;
+          });
+        }
+      } else if (message.type === 'system_message') {
+        // System message (e.g., user joined/left group)
+        console.log(`[系統訊息] ${message.text || ''}`);
+        // If it's for the active group chat, add it as a system message
+        if (message.groupId && activeSession?.type === 'group' && activeSession.id === message.groupId) {
+          const systemMsg: Message = {
+            id: Date.now(), // Temporary ID for system messages
+            senderId: message.userId || 0,
+            groupId: message.groupId,
+            text: message.text || '',
+            timestamp: message.timestamp ? new Date(message.timestamp).getTime() : Date.now(),
+          };
+          setMessages(prev => [...prev, systemMsg]);
+        }
+        // Reload groups to reflect changes
+        loadData();
+      } else if (message.type === 'message_notification') {
+        // Message notification (for users not viewing the chat)
+        console.log(`[新訊息] ${message.senderName || '未知用戶'}: ${message.text || ''}`);
+        // You can add a notification UI here (e.g., toast, badge, etc.)
+      } else if (message.type === 'friend_change') {
+        // Reload friends list when friend is added/removed
+        if (message.action === 'added' || message.action === 'removed') {
+          loadData();
+        }
+      } else if (message.type === 'group_change') {
+        // Reload groups when group is created/updated/deleted
+        if (message.action === 'created' || message.action === 'updated' || message.action === 'deleted' || 
+            message.action === 'member_added' || message.action === 'member_removed') {
+          loadData();
+          
+          // If it's a member_added or member_removed, also show system message in active chat
+          if ((message.action === 'member_added' || message.action === 'member_removed') && 
+              activeSession?.type === 'group' && activeSession.id === message.groupId) {
+            const systemMsg: Message = {
+              id: Date.now(),
+              senderId: message.userInfo?.id || 0,
+              groupId: message.groupId,
+              text: message.userInfo ? 
+                `${message.userInfo.name} ${message.action === 'member_added' ? '加入' : '離開'}了群組` : 
+                `成員${message.action === 'member_added' ? '加入' : '離開'}了群組`,
+              timestamp: Date.now(),
+            };
+            setMessages(prev => [...prev, systemMsg]);
+          }
+        }
       }
     });
   };
@@ -186,18 +327,24 @@ const App: React.FC = () => {
   // Load messages when session changes
   useEffect(() => {
     if (activeSession && currentUser) {
-      loadMessages();
+      // Clear messages first, then load
+      setMessages([]);
+      // Small delay to ensure DOM is ready
+      setTimeout(() => {
+        loadMessages();
+      }, 50);
     } else {
       setMessages([]);
     }
-  }, [activeSession, currentUser]);
+  }, [activeSession?.id, activeSession?.type, currentUser?.id]);
 
   const loadMessages = async () => {
     if (!activeSession || !currentUser) return;
     
     try {
       const chatType = activeSession.type === 'personal' ? 'personal' : 'group';
-      const apiMessages = await messagesApi.getMessages(chatType, activeSession.id, 50, 0);
+      // Load more messages (e.g., 100) to ensure we get all history
+      const apiMessages = await messagesApi.getMessages(chatType, activeSession.id, 100, 0);
       
       // Convert API messages to frontend format
       const convertedMessages: Message[] = apiMessages.map(msg => ({
@@ -210,7 +357,18 @@ const App: React.FC = () => {
         timestamp: new Date(msg.timestamp).getTime(),
       }));
       
+      // Sort by timestamp to ensure chronological order
+      convertedMessages.sort((a, b) => a.timestamp - b.timestamp);
+      
       setMessages(convertedMessages);
+      
+      // Scroll to bottom after messages are loaded
+      setTimeout(() => {
+        const messagesEnd = document.querySelector('[data-messages-end]');
+        if (messagesEnd) {
+          messagesEnd.scrollIntoView({ behavior: 'auto', block: 'end' });
+        }
+      }, 100);
     } catch (err) {
       console.error('Failed to load messages:', err);
     }
@@ -221,6 +379,21 @@ const App: React.FC = () => {
 
     const isGroup = activeSession.type === 'group';
     const ws = getWebSocket();
+    
+    // Create temporary message for immediate display
+    const tempMessageId = -Date.now(); // Use negative ID for temporary messages
+    const tempMessage: Message = {
+      id: tempMessageId,
+      senderId: currentUser.id,
+      recipientId: !isGroup ? activeSession.id : undefined,
+      groupId: isGroup ? activeSession.id : undefined,
+      text: text?.trim(),
+      attachment: attachment,
+      timestamp: Date.now(),
+    };
+    
+    // Immediately add to messages for instant display
+    setMessages(prev => [...prev, tempMessage]);
     
     try {
       if (attachment) {
@@ -239,19 +412,18 @@ const App: React.FC = () => {
           ws.sendMessage(text, undefined, activeSession.id, undefined);
         }
         
-        // Also save via API as backup
-        try {
-          if (isGroup) {
-            await messagesApi.sendMessage(text, undefined, activeSession.id);
-          } else {
-            await messagesApi.sendMessage(text, activeSession.id, undefined);
-          }
-        } catch (err) {
-          console.error('Failed to save message via API:', err);
-        }
+        // Also save via API as backup (but don't wait for it)
+        messagesApi.sendMessage(text, !isGroup ? activeSession.id : undefined, isGroup ? activeSession.id : undefined)
+          .catch(err => {
+            console.error('Failed to save message via API:', err);
+            // Remove temporary message if API fails
+            setMessages(prev => prev.filter(m => m.id !== tempMessageId));
+          });
       }
     } catch (err) {
       console.error('Failed to send message:', err);
+      // Remove temporary message on error
+      setMessages(prev => prev.filter(m => m.id !== tempMessageId));
     }
   };
 

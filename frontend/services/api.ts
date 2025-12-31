@@ -244,6 +244,12 @@ export const messagesApi = {
     });
   },
   
+  markMessageRead: async (messageId: number) => {
+    return apiRequest(`/messages/${messageId}/read`, {
+      method: 'POST',
+    });
+  },
+  
   uploadMessage: async (file: File, recipientId?: number, groupId?: number) => {
     const formData = new FormData();
     formData.append('file', file);

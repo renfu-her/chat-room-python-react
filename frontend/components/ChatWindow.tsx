@@ -16,12 +16,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, messages, currentUser,
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (immediate: boolean = false) => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ 
+        behavior: immediate ? 'auto' : 'smooth',
+        block: 'end'
+      });
+    }
   };
 
   useEffect(() => {
-    scrollToBottom();
+    // When messages change, scroll to bottom
+    // Use immediate scroll for initial load, smooth for new messages
+    const isInitialLoad = messages.length > 0 && messages.every(m => m.id > 0);
+    scrollToBottom(!isInitialLoad);
   }, [messages]);
 
   const handleSend = (e: React.FormEvent) => {
@@ -100,6 +108,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, messages, currentUser,
     );
   };
 
+  // Scroll to bottom when component mounts or session changes
+  useEffect(() => {
+    // Scroll immediately on mount or session change
+    setTimeout(() => {
+      scrollToBottom(true);
+    }, 100);
+  }, [session.id, session.type]);
+
   return (
     <div className="flex flex-col h-full bg-white dark:bg-gray-900">
       <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 sm:space-y-6">
@@ -143,7 +159,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, messages, currentUser,
             </div>
           );
         })}
-        <div ref={messagesEndRef} />
+        <div ref={messagesEndRef} data-messages-end />
       </div>
 
       <div className="p-3 sm:p-4 border-t border-gray-100 dark:border-gray-800 bg-white/50 dark:bg-gray-900/50">

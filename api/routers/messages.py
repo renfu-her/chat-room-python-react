@@ -8,6 +8,7 @@ from datetime import datetime
 from database import get_db
 from models.user import User
 from models.message import Message
+from models.message_read import MessageRead
 from models.group import GroupMember, GroupDeniedMember
 from utils.auth import get_current_user_dependency as get_current_user
 from utils.image import process_image_upload
@@ -49,7 +50,7 @@ async def get_messages(
                 and_(Message.sender_id == target_id, Message.recipient_id == current_user.id)
             ),
             Message.group_id.is_(None)
-        ).order_by(Message.timestamp.desc()).limit(limit).offset(offset).all()
+        ).order_by(Message.timestamp.asc()).limit(limit).offset(offset).all()
         
     elif chat_type == "group":
         # Group chat: verify user is a member
@@ -66,16 +67,16 @@ async def get_messages(
         
         messages = db.query(Message).filter(
             Message.group_id == target_id
-        ).order_by(Message.timestamp.desc()).limit(limit).offset(offset).all()
+        ).order_by(Message.timestamp.asc()).limit(limit).offset(offset).all()
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid chat_type. Must be 'personal' or 'group'"
         )
     
-    # Convert to response format
+    # Convert to response format (messages are already in chronological order)
     result = []
-    for msg in reversed(messages):  # Reverse to get chronological order
+    for msg in messages:
         attachment = None
         if msg.attachment_url:
             attachment = {
@@ -158,6 +159,75 @@ async def send_message(
         attachment=None,
         timestamp=new_message.timestamp
     )
+
+@router.post("/{message_id}/read", response_model=dict)
+async def mark_message_read(
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Mark message as read"""
+    # Check if message exists and user has access
+    message = db.query(Message).filter(Message.id == message_id).first()
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found"
+        )
+    
+    # Check access
+    if message.recipient_id and message.recipient_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to read this message"
+        )
+    
+    if message.group_id:
+        is_member = db.query(GroupMember).filter(
+            GroupMember.group_id == message.group_id,
+            GroupMember.user_id == current_user.id
+        ).first()
+        if not is_member:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not a member of this group"
+            )
+    
+    # Check if already read
+    existing = db.query(MessageRead).filter(
+        MessageRead.message_id == message_id,
+        MessageRead.user_id == current_user.id
+    ).first()
+    
+    if not existing:
+        # Mark as read
+        message_read = MessageRead(
+            message_id=message_id,
+            user_id=current_user.id
+        )
+        db.add(message_read)
+        db.commit()
+        
+        # Broadcast read status via WebSocket
+        try:
+            from websocket.chat import active_connections
+            read_notification = {
+                "type": "message_read",
+                "message_id": message_id,
+                "user_id": current_user.id
+            }
+            
+            # Notify sender if they're connected
+            if message.sender_id in active_connections:
+                try:
+                    ws = active_connections[message.sender_id]
+                    await ws.send_json(read_notification)
+                except:
+                    pass
+        except:
+            pass
+    
+    return {"message": "Message marked as read"}
 
 @router.post("/upload", response_model=MessageResponse)
 async def upload_message(

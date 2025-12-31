@@ -250,6 +250,16 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 **注意**：圖片會自動轉換為 webp 格式，檔名使用 UUID。
 
+#### `POST /api/messages/{message_id}/read`
+標記訊息為已讀
+
+**Response:**
+```json
+{
+  "message": "Message marked as read"
+}
+```
+
 ## WebSocket 使用說明
 
 ### 連接
@@ -321,6 +331,60 @@ ws://localhost:8000/ws/chat
 }
 ```
 
+#### 用戶狀態更新
+
+當好友上線或離線時會收到：
+
+```json
+{
+  "type": "user_status_update",
+  "user_id": 2,
+  "status": "online"
+}
+```
+
+#### 好友變更通知
+
+當好友被添加或移除時會收到：
+
+```json
+{
+  "type": "friend_change",
+  "action": "added",
+  "user_id": 1,
+  "friend_id": 2
+}
+```
+
+#### 群組變更通知
+
+當群組發生變化時會收到：
+
+```json
+{
+  "type": "group_change",
+  "action": "created",
+  "group_id": 1,
+  "data": {
+    "name": "New Group",
+    "creator_id": 1,
+    "members": [1, 2, 3]
+  }
+}
+```
+
+#### 訊息已讀通知
+
+當訊息被標記為已讀時，發送者會收到：
+
+```json
+{
+  "type": "message_read",
+  "message_id": 123,
+  "user_id": 2
+}
+```
+
 ## 資料庫結構
 
 ### users 表
@@ -370,6 +434,13 @@ ws://localhost:8000/ws/chat
 - `attachment_name`: 附件名稱
 - `attachment_type`: 附件類型
 - `timestamp`: 時間戳
+
+### message_reads 表
+- `id`: 主鍵
+- `message_id`: 訊息 ID
+- `user_id`: 已讀用戶 ID
+- `read_at`: 已讀時間
+- UNIQUE(message_id, user_id)
 
 ## 開發指南
 
@@ -440,3 +511,10 @@ api/
 4. **WebSocket**：
    - 連接池儲存在記憶體中，重啟服務會斷開所有連接
    - 生產環境建議使用 Redis 或專門的 WebSocket 服務
+   - 支援心跳機制（ping/pong）以檢測連接狀態
+   - 自動廣播用戶狀態、好友變更、群組變更等事件
+
+5. **即時同步**：
+   - 用戶狀態（上線/離線）會即時同步到所有好友
+   - 好友/群組變更會即時通知相關用戶
+   - 登出時立即更新狀態，不再需要等待

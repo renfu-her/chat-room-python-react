@@ -3,7 +3,7 @@
 const WS_BASE_URL = 'ws://localhost:8000/ws/chat';
 
 export interface WebSocketMessage {
-  type: 'message' | 'connected' | 'error';
+  type: 'message' | 'connected' | 'error' | 'user_status_update' | 'friend_change' | 'group_change' | 'message_read' | 'user_login' | 'user_logout' | 'system_message' | 'message_notification';
   id?: number;
   senderId?: number;
   recipientId?: number;
@@ -19,6 +19,21 @@ export interface WebSocketMessage {
   timestamp?: string;
   message?: string;
   userId?: number;
+  // User status update
+  status?: 'online' | 'offline';
+  userName?: string;
+  // Friend change
+  action?: string; // 'added' | 'removed' | 'created' | 'updated' | 'deleted' | 'member_added' | 'member_removed'
+  friendId?: number;
+  // Group change
+  data?: any;
+  groupName?: string;
+  userInfo?: { id: number; name: string };
+  // Message read
+  messageId?: number;
+  // Message notification
+  senderName?: string;
+  groupName?: string;
 }
 
 export type MessageHandler = (message: WebSocketMessage) => void;
@@ -49,6 +64,9 @@ export class ChatWebSocket {
       console.log('WebSocket connected');
       this.reconnectAttempts = 0;
       this.connectHandlers.forEach(handler => handler());
+      
+      // Start heartbeat to keep connection alive
+      this.startHeartbeat();
     };
 
     this.ws.onmessage = (event) => {
@@ -67,6 +85,7 @@ export class ChatWebSocket {
 
     this.ws.onclose = () => {
       console.log('WebSocket disconnected');
+      this.stopHeartbeat();
       this.disconnectHandlers.forEach(handler => handler());
       
       // Attempt to reconnect if not manually closed
@@ -80,12 +99,14 @@ export class ChatWebSocket {
   }
 
   disconnect(): void {
+    this.stopHeartbeat();
     this.isManualClose = true;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
   }
+
 
   sendMessage(
     text?: string,
@@ -156,6 +177,33 @@ export class ChatWebSocket {
 
   isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
+  private startHeartbeat(): void {
+    // Clear existing interval
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    
+    // Send ping every 30 seconds
+    this.heartbeatInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: 'ping' }));
+        } catch (error) {
+          console.error('Failed to send heartbeat:', error);
+        }
+      }
+    }, 30000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 }
 
