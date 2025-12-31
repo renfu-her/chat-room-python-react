@@ -1,0 +1,5 @@
+{
+  "name": "Chat Message React",
+  "description": "A sophisticated chat application supporting direct messages, group chats, dark/light modes, and member management for up to 20 pre-configured accounts.",
+  "requestFramePermissions": []
+}
